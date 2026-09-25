@@ -10,6 +10,8 @@ A simple AI-powered app to help Grandma fix her tech problems, one step at a tim
 - Step-by-step troubleshooting without overwhelming the user
 - Simple explanations for users with limited technical experience
 - Multi-turn conversations that keep track of the current troubleshooting session
+- Image attachments for visual troubleshooting
+- Follow-up questions can reference images shared earlier in the conversation
 - Safety-focused guidance for potentially destructive or sensitive actions
 - Simple web interface built with Gradio
 
