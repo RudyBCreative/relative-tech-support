@@ -1,5 +1,6 @@
 import os
 import base64
+import mimetypes
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -73,13 +74,18 @@ def chat(message, history):
         })
 
     if files:
-        image_path = files[0]
-        base64_image = encode_image(image_path)
+      image_path = files[0]
+      base64_image = encode_image(image_path)
 
-        user_content.append({
-            "type": "input_image",
-            "image_url": f"data:image/jpeg;base64,{base64_image}"
-        })
+      mime_type, _ = mimetypes.guess_type(image_path)
+
+      if mime_type is None:
+        mime_type = "image/jpeg"
+
+      user_content.append({
+        "type": "input_image",
+        "image_url": f"data:{mime_type};base64,{base64_image}"
+      })
 
     input_messages = []
 
@@ -87,30 +93,70 @@ def chat(message, history):
         role = item.get("role")
         content = item.get("content")
 
-        if role in ["user", "assistant"] and isinstance(content, str):
+        if role not in ["user", "assistant"]:
+            continue
+
+        if isinstance(content, str):
             input_messages.append({
                 "role": role,
                 "content": content
             })
+
+        elif isinstance(content, list):
+            history_content = []
+
+            for part in content:
+                if part.get("type") == "text":
+                    history_content.append({
+                        "type": "input_text" if role == "user" else "output_text",
+                        "text": part.get("text", "")
+                    })
+
+                elif part.get("type") == "file" and role == "user":
+                    file_info = part.get("file", {})
+                    image_path = file_info.get("path")
+
+                    if image_path:
+                        base64_image = encode_image(image_path)
+                        mime_type = file_info.get("mime_type") or "image/jpeg"
+
+                        history_content.append({
+                            "type": "input_image",
+                            "image_url": f"data:{mime_type};base64,{base64_image}"
+                        })
+
+            if history_content:
+                input_messages.append({
+                    "role": role,
+                    "content": history_content
+                })
 
     input_messages.append({
         "role": "user",
         "content": user_content
     })
 
-    response = openai.responses.create(
-        model=MODEL,
-        instructions=system_message,
-        input=input_messages,
-        stream=True
-    )
+    try:
+        response = openai.responses.create(
+            model=MODEL,
+            instructions=system_message,
+            input=input_messages,
+            stream=True
+        )
 
-    response_text = ""
+        response_text = ""
 
-    for event in response:
-        if event.type == "response.output_text.delta":
-            response_text += event.delta
-            yield response_text
+        for event in response:
+            if event.type == "response.output_text.delta":
+                response_text += event.delta
+                yield response_text
+
+    except Exception as error:
+        print(f"OpenAI API error: {error}")
+        yield (
+            "Sorry, I'm having trouble connecting to the support service "
+            "right now. Please try again in a moment."
+        )
 
 demo = gr.ChatInterface(
     fn=chat,
@@ -119,4 +165,5 @@ demo = gr.ChatInterface(
     multimodal=True
 )
 
-demo.launch()
+if __name__ == "__main__":
+    demo.launch()
