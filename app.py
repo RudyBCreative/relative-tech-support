@@ -1,6 +1,8 @@
 import os
 import base64
 import mimetypes
+import time
+from collections import defaultdict, deque
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -59,9 +61,36 @@ Safety and boundaries:
 """
 
 MODEL = "gpt-5-nano"
+
+MAX_IMAGE_SIZE_MB = 10
+MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024
+RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_WINDOW_SECONDS = 10 * 60
+
+request_history = defaultdict(deque)
+
+def is_rate_limited(client_ip):
+    now = time.time()
+    timestamps = request_history[client_ip]
+
+    while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW_SECONDS:
+        timestamps.popleft()
+
+    if len(timestamps) >= RATE_LIMIT_REQUESTS:
+        return True
+
+    timestamps.append(now)
+    return False
+
 openai = OpenAI(api_key=api_key)
 
-def chat(message, history):
+def chat(message, history, request: gr.Request):
+    client_ip = request.client.host if request and request.client else "unknown"
+
+    if is_rate_limited(client_ip):
+        yield "You're sending messages pretty quickly. Please wait a few minutes and try again."
+        return
+
     user_text = message.get("text", "")
     files = message.get("files", [])
 
@@ -75,12 +104,18 @@ def chat(message, history):
 
     if files:
       image_path = files[0]
-      base64_image = encode_image(image_path)
+
+      if os.path.getsize(image_path) > MAX_IMAGE_SIZE_BYTES:
+        yield f"That image is too large. Please upload an image smaller than {MAX_IMAGE_SIZE_MB} MB."
+        return
 
       mime_type, _ = mimetypes.guess_type(image_path)
 
-      if mime_type is None:
-        mime_type = "image/jpeg"
+      if mime_type is None or not mime_type.startswith("image/"):
+        yield "That file doesn't appear to be an image. Please upload an image file."
+        return
+
+      base64_image = encode_image(image_path)
 
       user_content.append({
         "type": "input_image",
@@ -141,6 +176,7 @@ def chat(message, history):
             model=MODEL,
             instructions=system_message,
             input=input_messages,
+            max_output_tokens=2500,
             stream=True
         )
 
@@ -150,6 +186,12 @@ def chat(message, history):
             if event.type == "response.output_text.delta":
                 response_text += event.delta
                 yield response_text
+
+            elif event.type == "response.incomplete" and not response_text:
+                yield (
+                    "Sorry, I wasn't able to finish that response. "
+                    "Please try asking again."
+                )
 
     except Exception as error:
         print(f"OpenAI API error: {error}")
@@ -166,4 +208,5 @@ demo = gr.ChatInterface(
 )
 
 if __name__ == "__main__":
+    demo.queue(max_size=10)
     demo.launch()
